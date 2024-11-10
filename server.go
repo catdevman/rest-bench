@@ -1,48 +1,80 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"runtime"
+	"io"
+	"net"
+	"strings"
 )
 
 func main() {
-	fmt.Println("Version:", runtime.Version())
-	fmt.Println("NumCPU:", runtime.NumCPU())
-	fmt.Println("GOMAXPROCS:", runtime.GOMAXPROCS(0))
-
-	fmt.Println("Listening on port 3000")
-	err := http.ListenAndServe(":3000", http.HandlerFunc(handler))
-	fmt.Println(err)
-}
-
-func handler(w http.ResponseWriter, r *http.Request) {
-	var body Body
-	err := json.NewDecoder(r.Body).Decode(&body)
+	ln, err := net.Listen("tcp", ":3000") // Listen on port 8080
 	if err != nil {
 		panic(err)
 	}
+	defer ln.Close()
 
-	w.Header().Set("Content-Type", "application/json")
-	err = json.NewEncoder(w).Encode(body)
-	if err != nil {
-		panic(err)
+	for {
+		conn, err := ln.Accept() // Accept incoming connections
+		if err != nil {
+			fmt.Println("Error accepting connection:", err)
+			continue
+		}
+		go handleConnection(conn)
 	}
 }
+func handleConnection(conn net.Conn) {
+	defer conn.Close()
 
-type Body struct {
-	Colors []Color `json:"colors"`
-}
+	reader := bufio.NewReader(conn)
 
-type Color struct {
-	Color    string `json:"color,omitempty"`
-	Category string `json:"category,omitempty"`
-	Type     string `json:"type,omitempty"`
-	Code     Code   `json:"code,omitempty"`
-}
+	// Read the request line
+	requestLine, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Println("Error reading request line:", err)
+		return
+	}
 
-type Code struct {
-	RGBA []int  `json:"rgba,omitempty"`
-	Hex  string `json:"hex,omitempty"`
+	// Check if it's a POST request to /myroute
+	if strings.HasPrefix(requestLine, "POST /") {
+		// Read headers until an empty line is encountered
+		for {
+			headerLine, err := reader.ReadString('\n')
+			if err != nil {
+				fmt.Println("Error reading headers:", err)
+				return
+			}
+			headerLine = strings.TrimSpace(headerLine)
+			if headerLine == "" {
+				break // End of headers
+			}
+		}
+
+		// Read the request body
+		var body bytes.Buffer
+		_, err = io.Copy(&body, reader)
+		if err != nil {
+			fmt.Println("Error reading request body:", err)
+			return
+		}
+
+		// Unmarshal the JSON body
+		var data map[string]any
+		err = json.Unmarshal(body.Bytes(), &data)
+		if err != nil {
+			fmt.Println("Error unmarshalling JSON:", err)
+			return
+		}
+
+		// Send a response
+		response := "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"status\": \"ok\"}"
+		conn.Write([]byte(response))
+	} else {
+		// Handle other requests or send a 404 Not Found
+		response := "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n\r\nNot Found"
+		conn.Write([]byte(response))
+	}
 }
